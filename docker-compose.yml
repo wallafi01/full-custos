@@ -1,0 +1,10 @@
+
+services:
+  aws-cost-report:
+    build: .
+    container_name: aws_cost_report
+    env_file:
+      - .env  # Carrega as variáveis do arquivo .env
+    volumes:
+      - ./relatorios:/app/relatorios  # Mapeia a pasta "relatorios" na raiz do projeto para o container
+    command: python script.py
