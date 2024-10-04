@@ -21,6 +21,8 @@ def generate_report(region):
     vpc_client = boto3.client('ec2', region_name=region)
     ecr_client = boto3.client('ecr', region_name=region)
     ecs_client = boto3.client('ecs', region_name=region)
+    asg_client = boto3.client('autoscaling', region_name=region)
+    eks_client = boto3.client('eks', region_name=region)
     ce_client = boto3.client('ce')
     sns_client = boto3.client('sns', region_name=region)
 
@@ -79,6 +81,7 @@ def generate_report(region):
     s3_buckets = s3_client.list_buckets()
     s3_data = []
     for bucket in s3_buckets['Buckets']:
+        # Obtém a região do bucket
         bucket_region = s3_client.get_bucket_location(Bucket=bucket['Name'])['LocationConstraint']
         if bucket_region is None:
             bucket_region = 'us-east-1'
@@ -210,7 +213,7 @@ def generate_report(region):
             'Nome do Recurso': eip.get('PublicIp', 'N/A'),
             'ID': eip.get('AllocationId', 'N/A'),
             'Tipo': 'Elastic IP',
-            'Status': 'Ativo',
+            'Status': 'Ativo' if 'InstanceId' in eip else 'Não associado',
             'Custo': get_cost_by_service('Elastic IP')
         })
 
@@ -220,11 +223,11 @@ def generate_report(region):
     for snapshot in snapshots['Snapshots']:
         snapshot_data.append({
             'Serviço': 'Snapshot',
-            'Nome do Recurso': snapshot.get('Description', 'N/A'),
+            'Nome do Recurso': snapshot['Description'],
             'ID': snapshot['SnapshotId'],
             'Tipo': 'Snapshot',
             'Status': snapshot['State'],
-            'Custo': get_cost_by_service('Amazon Elastic Block Store')  # Custo baseado no EBS
+            'Custo': get_cost_by_service('Amazon Elastic Block Store')
         })
 
     # Coletando dados de Security Groups
@@ -246,7 +249,7 @@ def generate_report(region):
     for vpc in vpcs['Vpcs']:
         vpc_data.append({
             'Serviço': 'VPC',
-            'Nome do Recurso': vpc.get('VpcId'),
+            'Nome do Recurso': vpc['VpcId'],
             'ID': vpc['VpcId'],
             'Tipo': 'VPC',
             'Status': 'Ativo',
@@ -259,7 +262,7 @@ def generate_report(region):
     for subnet in subnets['Subnets']:
         subnet_data.append({
             'Serviço': 'Subnet',
-            'Nome do Recurso': subnet.get('SubnetId'),
+            'Nome do Recurso': subnet['SubnetId'],
             'ID': subnet['SubnetId'],
             'Tipo': 'Subnet',
             'Status': 'Ativo',
@@ -272,7 +275,7 @@ def generate_report(region):
     for rt in route_tables['RouteTables']:
         route_table_data.append({
             'Serviço': 'Route Table',
-            'Nome do Recurso': rt.get('RouteTableId'),
+            'Nome do Recurso': rt['RouteTableId'],
             'ID': rt['RouteTableId'],
             'Tipo': 'Route Table',
             'Status': 'Ativo',
@@ -285,18 +288,69 @@ def generate_report(region):
     for igw in igws['InternetGateways']:
         igw_data.append({
             'Serviço': 'Internet Gateway',
-            'Nome do Recurso': igw.get('InternetGatewayId'),
+            'Nome do Recurso': igw['InternetGatewayId'],
             'ID': igw['InternetGatewayId'],
             'Tipo': 'Internet Gateway',
             'Status': 'Ativo',
-            'Custo': 'N/A'  # Internet Gateways não têm custo direto
+            'Custo': 'N/A'  # IGWs não têm custo direto
         })
+
+    # Coletando dados de Auto Scaling Groups
+    asg_data = []
+    asg_groups = asg_client.describe_auto_scaling_groups()
+    for asg in asg_groups['AutoScalingGroups']:
+        asg_data.append({
+            'Serviço': 'Auto Scaling Group',
+            'Nome do Recurso': asg['AutoScalingGroupName'],
+            'ID': asg['AutoScalingGroupARN'],
+            'Tipo': 'Auto Scaling Group',
+            'Status': 'Ativo' if asg['HealthStatus'] == 'Healthy' else 'Não saudável',
+            'Custo': get_cost_by_service('Amazon EC2 Auto Scaling')
+        })
+
+        # Coletando dados dos EC2 Instances em Auto Scaling Group
+        for instance in asg['Instances']:
+            asg_data.append({
+                'Serviço': 'EC2 Instance (Auto Scaling)',
+                'Nome do Recurso': instance.get('InstanceId', 'N/A'),
+                'ID': instance['InstanceId'],
+                'Tipo': 'EC2',
+                'Status': instance['HealthStatus'],
+                'Custo': get_cost_by_service('Amazon Elastic Compute Cloud')
+            })
+
+    # Coletando dados de EKS Clusters
+    eks_data = []
+    eks_clusters = eks_client.list_clusters()
+    for cluster_name in eks_clusters['clusters']:
+        cluster_info = eks_client.describe_cluster(name=cluster_name)['cluster']
+        eks_data.append({
+            'Serviço': 'EKS Cluster',
+            'Nome do Recurso': cluster_info['name'],
+            'ID': cluster_info['arn'],
+            'Tipo': 'EKS',
+            'Status': cluster_info['status'],
+            'Custo': get_cost_by_service('Amazon Elastic Kubernetes Service')
+        })
+
+        # Coletando dados dos nós do EKS
+        node_groups = eks_client.list_nodegroups(clusterName=cluster_name)
+        for node_group in node_groups['nodegroups']:
+            node_info = eks_client.describe_nodegroup(clusterName=cluster_name, nodegroupName=node_group)
+            eks_data.append({
+                'Serviço': 'EKS Node Group',
+                'Nome do Recurso': node_info['nodegroup']['nodeGroupName'],
+                'ID': node_info['nodegroup']['nodeGroupArn'],
+                'Tipo': 'Node Group',
+                'Status': node_info['nodegroup']['status'],
+                'Custo': get_cost_by_service('Amazon Elastic Kubernetes Service')
+            })
 
     # Unindo todos os dados
     all_data = (ec2_data + rds_data + s3_data + elb_data_v2 + elb_data_v1 +
                 nat_data + ecr_data + ecs_data + ebs_data + ami_data +
                 eip_data + snapshot_data + sg_data + vpc_data +
-                subnet_data + route_table_data + igw_data)
+                subnet_data + route_table_data + igw_data + asg_data + eks_data)
 
     df = pd.DataFrame(all_data)
 
@@ -332,78 +386,34 @@ def generate_report(region):
 
     print(f'Relatório gerado com sucesso: {output_filename}')
 
-# Função para gerar o relatório global de IAM
-def generate_global_iam_report():
-    iam_client = boto3.client('iam')
-
-    # Coletando dados de IAM Users
-    iam_users = iam_client.list_users()
-    iam_data = []
-    for user in iam_users['Users']:
-        iam_data.append({
-            'Serviço': 'IAM User',
-            'Nome do Recurso': user['UserName'],
-            'ID': user['UserId'],
-            'Tipo': 'Usuário',
-            'Status': 'Ativo',
-            'Custo': 'N/A'  # IAM Users não têm custo direto
-        })
-
-    # Coletando dados de IAM Roles
-    iam_roles = iam_client.list_roles()
-    iam_role_data = []
-    for role in iam_roles['Roles']:
-        iam_role_data.append({
-            'Serviço': 'IAM Role',
-            'Nome do Recurso': role['RoleName'],
-            'ID': role['RoleId'],
-            'Tipo': 'Função',
-            'Status': 'Ativo',
-            'Custo': 'N/A'  # IAM Roles não têm custo direto
-        })
-
-    # Unindo todos os dados de IAM
-    all_iam_data = iam_data + iam_role_data
-    df_iam = pd.DataFrame(all_iam_data)
-
-    # Salvando o relatório global de IAM
-    output_filename_iam = 'relatorios/aws_global_report.xlsx'
-    df_iam.to_excel(output_filename_iam, index=False)
-
-    # Formatando a planilha IAM
-    wb_iam = Workbook()
-    ws_iam = wb_iam.active
-    ws_iam.title = "Relatório IAM"
-
-    # Adicionando cabeçalhos
-    iam_headers = df_iam.columns.tolist()
-    ws_iam.append(iam_headers)
-
-    # Definindo estilos para os cabeçalhos IAM
-    header_fill_iam = PatternFill(start_color="00FFCC", end_color="00FFCC", fill_type="solid")
-    bold_font_iam = Font(bold=True)
-
-    # Aplicando estilos aos cabeçalhos IAM
-    for col in range(1, len(iam_headers) + 1):
-        cell = ws_iam.cell(row=1, column=col)
-        cell.fill = header_fill_iam
-        cell.font = bold_font_iam
-
-    # Adicionando os dados IAM
-    for row in df_iam.itertuples(index=False):
-        ws_iam.append(row)
-
-    # Salvando a planilha formatada IAM
-    wb_iam.save(output_filename_iam)
-
-    print(f'Relatório global de IAM gerado com sucesso: {output_filename_iam}')
-
 # Obtendo todas as regiões disponíveis
 regions = get_aws_regions()
 
 # Gerando o relatório para cada região
 for region in regions:
     generate_report(region)
+
+# Função global para gerar o relatório de IAM
+def generate_global_iam_report():
+    iam_client = boto3.client('iam')
+    users = iam_client.list_users()
+    iam_data = []
+
+    for user in users['Users']:
+        iam_data.append({
+            'Serviço': 'IAM',
+            'Nome do Recurso': user['UserName'],
+            'ID': user['UserId'],
+            'Tipo': 'Usuário',
+            'Status': 'Ativo',
+            'Custo': 'N/A'  # IAM não tem custo
+        })
+
+    df_iam = pd.DataFrame(iam_data)
+    output_filename_iam = 'relatorios/aws_iam_report.xlsx'
+    df_iam.to_excel(output_filename_iam, index=False)
+
+    print(f'Relatório IAM gerado com sucesso: {output_filename_iam}')
 
 # Gerando o relatório global de IAM
 generate_global_iam_report()
