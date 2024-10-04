@@ -79,7 +79,6 @@ def generate_report(region):
     s3_buckets = s3_client.list_buckets()
     s3_data = []
     for bucket in s3_buckets['Buckets']:
-        # Obtém a região do bucket
         bucket_region = s3_client.get_bucket_location(Bucket=bucket['Name'])['LocationConstraint']
         if bucket_region is None:
             bucket_region = 'us-east-1'
@@ -241,10 +240,63 @@ def generate_report(region):
             'Custo': 'N/A'  # Security Groups não têm custo direto
         })
 
+    # Coletando dados de VPCs
+    vpcs = vpc_client.describe_vpcs()
+    vpc_data = []
+    for vpc in vpcs['Vpcs']:
+        vpc_data.append({
+            'Serviço': 'VPC',
+            'Nome do Recurso': vpc.get('VpcId'),
+            'ID': vpc['VpcId'],
+            'Tipo': 'VPC',
+            'Status': 'Ativo',
+            'Custo': 'N/A'  # VPCs não têm custo direto
+        })
+
+    # Coletando dados de Subnets
+    subnets = vpc_client.describe_subnets()
+    subnet_data = []
+    for subnet in subnets['Subnets']:
+        subnet_data.append({
+            'Serviço': 'Subnet',
+            'Nome do Recurso': subnet.get('SubnetId'),
+            'ID': subnet['SubnetId'],
+            'Tipo': 'Subnet',
+            'Status': 'Ativo',
+            'Custo': 'N/A'  # Subnets não têm custo direto
+        })
+
+    # Coletando dados de Route Tables
+    route_tables = vpc_client.describe_route_tables()
+    route_table_data = []
+    for rt in route_tables['RouteTables']:
+        route_table_data.append({
+            'Serviço': 'Route Table',
+            'Nome do Recurso': rt.get('RouteTableId'),
+            'ID': rt['RouteTableId'],
+            'Tipo': 'Route Table',
+            'Status': 'Ativo',
+            'Custo': 'N/A'  # Route Tables não têm custo direto
+        })
+
+    # Coletando dados de Internet Gateways
+    igws = vpc_client.describe_internet_gateways()
+    igw_data = []
+    for igw in igws['InternetGateways']:
+        igw_data.append({
+            'Serviço': 'Internet Gateway',
+            'Nome do Recurso': igw.get('InternetGatewayId'),
+            'ID': igw['InternetGatewayId'],
+            'Tipo': 'Internet Gateway',
+            'Status': 'Ativo',
+            'Custo': 'N/A'  # Internet Gateways não têm custo direto
+        })
+
     # Unindo todos os dados
-    all_data = (ec2_data + rds_data + s3_data + elb_data_v2 + elb_data_v1 + 
-                nat_data + ecr_data + ecs_data + ebs_data + ami_data + 
-                eip_data + snapshot_data + sg_data)
+    all_data = (ec2_data + rds_data + s3_data + elb_data_v2 + elb_data_v1 +
+                nat_data + ecr_data + ecs_data + ebs_data + ami_data +
+                eip_data + snapshot_data + sg_data + vpc_data +
+                subnet_data + route_table_data + igw_data)
 
     df = pd.DataFrame(all_data)
 
